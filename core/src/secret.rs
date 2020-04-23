@@ -1,127 +1,100 @@
-extern crate aes;
-extern crate rand;
-extern crate x25519_dalek;
+use std::time::Instant;
+use uuid::Uuid;
+use wasm_bindgen::prelude::*;
 
-use aes::{
-	Aes256,
-	block_cipher_trait::{
-		BlockCipher,
-		generic_array::{GenericArray, typenum::U16},
-	},
-};
-use rand::rngs::OsRng;
-pub use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
-
-pub trait KeyPair {
-	fn generate() -> Self;
-	fn private_key(&self) -> [u8; 32];
-	fn public_key(&self) -> PublicKey;
-	fn shared_secret(&self, other: &PublicKey) -> SharedSecret;
-	fn encrypt_local(&self, data: &mut Vec<u8>) -> Result<(), &str>;
-	fn decrypt_local(&self, data: &mut Vec<u8>);
+#[wasm_bindgen]
+#[derive(PartialEq, Eq, Debug)]
+pub enum SecretType {
+	Empty = 0,
+	Login = 1,
 }
 
-fn crypt(secret: &StaticSecret, data: &mut Vec<u8>, f: impl Fn(&Aes256, &mut GenericArray<u8, U16>)) {
-	let pk = &secret.to_bytes();
-	let key = GenericArray::from_slice(pk);
-	let cipher = Aes256::new(&key);
-
-	let new_len = (data.len() + 15) / 16 * 16;
-	data.resize(new_len, 0);
-
-	let mut chunks = data.chunks_exact_mut(16);
-	for chunk in &mut chunks {
-		f(&cipher, GenericArray::from_mut_slice(chunk));
-	}
+#[wasm_bindgen]
+#[derive(PartialEq, Eq, Debug)]
+pub enum SecretFieldType {
+	Text = 0,
+	Hidden = 1,
 }
 
-impl KeyPair for StaticSecret {
-	fn generate() -> Self {
-		Self::new(&mut OsRng{})
-	}
-
-	fn private_key(&self) -> [u8; 32] {
-		self.to_bytes()
-	}
-
-	fn public_key(&self) -> PublicKey {
-		PublicKey::from(self)
-	}
-
-	fn shared_secret(&self, other: &PublicKey) -> SharedSecret {
-		self.diffie_hellman(other)
-	}
-
-	fn encrypt_local(&self, data: &mut Vec<u8>) -> Result<(), &str> {
-		if data.ends_with(&[0]) {
-			return Err("Cannot encrypt null-terminated data");
-		}
-
-		crypt(self, data, Aes256::encrypt_block);
-		Ok(())
-	}
-
-	fn decrypt_local(&self, data: &mut Vec<u8>) {
-		crypt(self, data, Aes256::decrypt_block);
-		let mut i = data.len();
-		while i > 0 && data[i-1] == 0 {
-			i -= 1;
-		}
-
-		data.truncate(i);
-	}
-}
-
+#[wasm_bindgen]
 #[derive(PartialEq, Eq, Debug)]
 pub struct Secret {
-	pub id: i64,
-	pub name: String,
-	pub value: Option<Vec<u8>>,
+	id: String,
+	name: String,
+	type_: SecretType,
+	icon: Option<String>,
+	data: Vec<SecretSection>,
+	custom: Vec<SecretSection>,
+	notes: Option<String>,
+	updated_at: Option<Instant>,
+	created_at: Instant,
+}
+
+#[wasm_bindgen]
+#[derive(PartialEq, Eq, Debug)]
+pub struct SecretSection {
+	name: Option<String>,
+	fields: Vec<SecretField>,
+}
+
+#[wasm_bindgen]
+#[derive(PartialEq, Eq, Debug)]
+pub struct SecretField {
+	name: String,
+	value: String,
+	r#type: SecretFieldType,
+}
+
+impl Secret {
+	pub fn new(name: String) -> Self {
+		Self{
+			id: Uuid::new_v4().to_string(),
+			type_: SecretType::Empty,
+			name,
+			icon: None,
+			data: vec![],
+			custom: vec![],
+			notes: None,
+			updated_at: None,
+			created_at: Instant::now(),
+		}
+	}
+
+	pub fn new_login(name: String, username: String, password: String) -> Self {
+		Self{
+			id: Uuid::new_v4().to_string(),
+			type_: SecretType::Login,
+			name,
+			icon: None,
+			data: vec![SecretSection{
+				name: None,
+				fields: vec![
+					SecretField{
+						name: "username".to_string(),
+						value: username,
+						r#type: SecretFieldType::Text,
+					},
+					SecretField{
+						name: "password".to_string(),
+						value: password,
+						r#type: SecretFieldType::Hidden,
+					},
+				],
+			}],
+			custom: vec![],
+			notes: None,
+			updated_at: None,
+			created_at: Instant::now(),
+		}
+	}
+
+	pub fn name(&self) -> &str {
+		return &self.name
+	}
 }
 
 pub trait SecretStore {
 	fn list(&self) -> Result<Vec<Secret>, String>;
 	fn add(&self, secret: &Secret) -> Result<(), String>;
 	fn get(&self, name: &str) -> Result<Option<Secret>, String>;
-}
-
-#[cfg(test)]
-mod test {
-	use quickcheck::TestResult;
-	use quickcheck_macros::quickcheck;
-	use super::{KeyPair, StaticSecret};
-
-	#[quickcheck]
-	fn encrypt_decrypt_identity(xs: Vec<u8>) -> bool {
-		let key_pair = StaticSecret::generate();
-
-		let mut encrypted = xs.to_vec();
-		let status = key_pair.encrypt_local(&mut encrypted);
-		if status.is_err() {
-			return xs.ends_with(&[0]);
-		}
-
-		key_pair.decrypt_local(&mut encrypted);
-
-		xs == encrypted
-	}
-
-	#[quickcheck]
-	fn encrypts_differently(xs: Vec<u8>) -> TestResult {
-		if xs.len() == 0 {
-			return TestResult::discard();
-		}
-
-		let key_pair = StaticSecret::generate();
-
-		let mut encrypted = xs.to_vec();
-		let status = key_pair.encrypt_local(&mut encrypted);
-		if status.is_err() {
-			return TestResult::from_bool(xs.ends_with(&[0]));
-		}
-
-		let mut xs2 = xs.clone();
-		xs2.resize(encrypted.len(), 0);
-		TestResult::from_bool(xs2 != encrypted)
-	}
 }
