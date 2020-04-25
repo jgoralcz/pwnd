@@ -1,0 +1,154 @@
+name: node
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    name: lint
+    runs-on: self-hosted
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Install Node v12
+        uses: actions/setup-node@v1
+        with:
+          node-version: 12
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ./core
+
+      - name: Run ESLint
+        run: npm run lint
+        working-directory: ./core
+
+
+  test:
+    name: test
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Cache cargo registry
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/registry
+          key: node-test-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache cargo index
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/git
+          key: node-test-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache cargo build
+        uses: actions/cache@v1
+        with:
+          path: target
+          key: node-test-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install latest nightly
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          default: true
+
+      - name: Build signaling server
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release -Z unstable-options --out-dir build --workspace
+
+      - name: Run signaling server
+        run: ./pwnd_signaler &
+        working-directory: ./build
+
+      - name: Install Node v12
+        uses: actions/setup-node@v1
+        with:
+          node-version: 12
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.3.0
+        with:
+          version: 'latest'
+
+      - name: Ensure wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ./core
+
+      - name: Build WASM
+        run: npm run wasm-node
+        working-directory: ./core
+
+      - name: Run Jest
+        run: npm run jest
+        working-directory: ./core
+
+  build:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Cache cargo registry
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/registry
+          key: node-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache cargo index
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/git
+          key: node-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache cargo build
+        uses: actions/cache@v1
+        with:
+          path: target
+          key: node-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install latest stable
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+
+      - name: Install Node
+        uses: actions/setup-node@v1
+        with:
+          node-version: '12.x'
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.3.0
+        with:
+          version: 'latest'
+
+      - name: Ensure wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ./core
+
+      - name: Build for Node
+        run: npm run wasm-node
+        working-directory: ./core
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v1
+        with:
+          name: pwnd_core_wasm_node
+          path: core/pkg
+
+      - name: Build for Browser
+        run: npm run wasm-browser
+        working-directory: ./core
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v1
+        with:
+          name: pwnd_core_wasm_browser
+          path: core/pkg-browser
